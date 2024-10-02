@@ -42,6 +42,10 @@ class GithubAPI:
         """Get a list of releases for project."""
         return self.internal_api(f"repos/{self.upstream_repo}/releases?per_page=100")
 
+    def archived(self) -> bool:
+        """Return the archival status for the repository"""
+        return self.internal_api(f"repos/{self.upstream_repo}")["archived"]
+
     def url_for_ref(self, ref: str, ref_type: RefType) -> str:
         """Get a URL for a ref."""
         if ref_type == RefType.tags or ref_type == RefType.releases:
@@ -62,6 +66,7 @@ class GithubAPI:
 class GitlabAPI:
     def __init__(self, upstream: str):
         # Find gitlab api root...
+        upstream = upstream.rstrip("/")
         self.forge_root = self.get_forge_root(upstream).rstrip("/")
         self.project_path = upstream.replace(self.forge_root, "").strip("/")
         self.project_id = self.find_project_id(self.project_path)
@@ -145,6 +150,10 @@ class GitlabAPI:
 
         return retval
 
+    def archived(self) -> bool:
+        """Return the archival status for the repository"""
+        return self.internal_api(f"projects/{self.project_id}").get("archived", False)
+
     def url_for_ref(self, ref: str, _: RefType) -> str:
         name = self.project_path.split("/")[-1]
         clean_ref = ref.replace("/", "-")
@@ -195,6 +204,10 @@ class GiteaForgejoAPI:
     def releases(self) -> list[dict[str, Any]]:
         """Get a list of releases for project."""
         return self.internal_api(f"repos/{self.project_path}/releases")
+
+    def archived(self) -> bool:
+        """Return the archival status for the repository"""
+        return self.internal_api(f"repos/{self.project_path}")["archived"]
 
     def url_for_ref(self, ref: str, _: RefType) -> str:
         """Get a URL for a ref."""
