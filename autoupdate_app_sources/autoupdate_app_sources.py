@@ -51,10 +51,39 @@ STRATEGIES = [
     "latest_webpage_link",
 ]
 
+ARCHITECTURES = [
+    "amd64", "arm64", "armfh", "i386"
+]
+
+TARBALL = "tarball"
+ARCHITECTURE_AGNOSTIC = "generic"
 
 class AutoUpdateError(RuntimeError):
     pass
 
+class AssetInfo:
+    def __init__(self, url: str, name: str, sha256: str | None = None):
+        self.url = url
+        self.name = name
+        self.sha256 = sha256
+
+    def __str__(self) -> str:
+        return self.name
+
+class LatestVersionAvailable:
+    def __init__(self, version: str, assets: dict[str, AssetInfo], msg: str):
+        self.version = version
+        self.assets = assets
+        self.msg = msg
+
+    def get_asset_for_arch(self, arch: str) -> AssetInfo:
+        if arch in self.assets:
+            return self.assets[arch]
+
+        raise AutoUpdateError(f"Arch {arch} not among {self.assets.keys()}")
+
+    def __str__(self) -> str:
+        return self.version
 
 @cache
 def get_github() -> tuple[
@@ -225,26 +254,24 @@ class AppAutoUpdater:
         string_input = ""
 
         for source, infos in self.sources.items():
-            update = self.get_source_update(source, infos)
-            if update is None:
+            version = self.get_source_update(source, infos)
+            if version is None:
                 continue
             # We assume we'll create a PR
             state = State.created
-            version, assets, msg = update
 
             if source == "main":
-                main_version = version
-                branch_name = f"ci-auto-update-{version}"
+                main_version = version.version
+                branch_name = f"ci-auto-update-{version.version}"
                 pr_title = f"Upgrade to v{version}"
 
-            if msg:
-                commit_msg += f"\n- `{source}` v{version}: {msg}"
+            if version.msg:
+                commit_msg += f"\n- `{source}` v{version}: {version.msg}"
                 string_input += f"\n{source}v{version}"
 
             self.repo.manifest_raw = self.replace_version_and_asset_in_manifest(
                 self.repo.manifest_raw,
                 version,
-                assets,
                 infos,
                 is_main=source == "main",
             )
@@ -381,39 +408,50 @@ class AppAutoUpdater:
 
     def get_source_update(
         self, name: str, infos: dict[str, Any]
-    ) -> Optional[tuple[str, Union[str, dict[str, str]], str]]:
+    ) -> Optional[LatestVersionAvailable]:
         autoupdate = infos.get("autoupdate")
         if autoupdate is None:
             return None
 
         print(f"\n  Checking {name} ...")
-        asset = autoupdate.get("asset", "tarball")
+        asset = autoupdate.get("asset", TARBALL)
+
+        if (
+            isinstance(asset, dict)
+            and isinstance(infos.get("url", None), str)
+            or isinstance(asset, str)
+            and not isinstance(infos.get("url"), str)
+        ):
+            raise AutoUpdateError(
+                "It looks like there's an inconsistency between the old asset list and the new ones... "
+                "One is arch-specific, the other is not... Did you forget to define arch-specific regexes? "
+            )
+
         strategy = autoupdate.get("strategy")
         if strategy not in STRATEGIES:
             raise ValueError(
                 f"Unknown update strategy '{strategy}' for '{name}', expected one of {STRATEGIES}"
             )
 
-        result = self.get_latest_version_and_asset(strategy, asset, infos)
-        if result is None:
+        new_version = self.get_latest_version_and_asset(strategy, asset, infos)
+        if new_version is None:
             return None
-        new_version, assets, more_info = result
 
         if name == "main":
             print(f"Current version in manifest: {self.current_version}")
-            print(f"Newest  version on upstream: {new_version}")
+            print(f"Newest  version on upstream: {new_version.version}")
 
             # Maybe new version is older than current version
             # Which can happen for example if we manually release a RC,
             # which is ignored by this script
             # Though we wrap this in a try/except pass, because don't want to miserably crash
             # if the tag can't properly be converted to int tuple ...
-            if self.current_version == new_version:
+            if self.current_version == new_version.version:
                 print("Up to date")
                 return None
             try:
                 if self.tag_to_int_tuple(self.current_version) > self.tag_to_int_tuple(
-                    new_version
+                    new_version.version
                 ):
                     print(
                         "Up to date (current version appears more recent than newest version found)"
@@ -422,49 +460,42 @@ class AppAutoUpdater:
             except (AssertionError, ValueError):
                 pass
 
-        if (
-            isinstance(assets, dict)
-            and isinstance(infos.get("url"), str)
-            or isinstance(assets, str)
-            and not isinstance(infos.get("url"), str)
-        ):
-            raise AutoUpdateError(
-                "It looks like there's an inconsistency between the old asset list and the new ones... "
-                "One is arch-specific, the other is not... Did you forget to define arch-specific regexes? "
-                f"New asset url is/are : {assets}"
-            )
-
-        if isinstance(assets, str) and infos["url"] == assets:
-            print(f"URL for asset {name} is up to date")
-            return None
-        if isinstance(assets, dict) and assets == {
-            k: infos[k]["url"] for k in assets.keys()
-        }:
+        current_assets_urls = infos.get("url", None)
+        if isinstance(current_assets_urls, str):
+            new_asset = new_version.get_asset_for_arch(ARCHITECTURE_AGNOSTIC)
+            if not new_asset:
+                raise AutoUpdateError(f"No updated asset found for {name}")
+            if new_asset.url == current_assets_urls:
+                print(f"URL for asset {name} is up to date")
+                return None
+        elif all(not infos.get(arch, None) or (new_version.get_asset_for_arch(arch) and new_version.get_asset_for_arch(arch).url == infos[arch]["url"]) for arch in ARCHITECTURES):
             print(f"URLs for asset {name} are up to date")
             return None
         print(f"Update needed for {name}")
-        return new_version, assets, more_info
+        return new_version
 
     @staticmethod
-    def find_matching_asset(assets: dict[str, str], regex: str) -> tuple[str, str]:
-        matching_assets = {
-            name: url for name, url in assets.items() if re.match(regex, name)
-        }
+    def find_matching_asset(assets: list[AssetInfo], regex: str) -> AssetInfo:
+        matching_assets = [
+            asset for asset in assets if re.match(regex, asset.name)
+        ]
         if not matching_assets:
             raise AutoUpdateError(
-                f"No assets matching regex '{regex}' in {list(assets.keys())}"
+                f"No assets matching regex '{regex}' in {list(a.name for a in assets)}"
             )
         if len(matching_assets) > 1:
             raise AutoUpdateError(
                 f"Too many assets matching regex '{regex}': {matching_assets}"
             )
-        return next(iter(matching_assets.items()))
+        return matching_assets[0]
 
     def get_latest_version_and_asset(
-        self, strategy: str, asset: Union[str, dict], infos: dict[str, Any]
-    ) -> Optional[tuple[str, Union[str, dict[str, str]], str]]:
+        self, strategy: str, asset: Union[str, dict], infos: dict[str, Union[str, dict[str, str]]]
+    ) -> Optional[LatestVersionAvailable]:
         autoupdate = infos.get("autoupdate")
+        assert autoupdate is not None and isinstance(autoupdate, dict)
         upstream = autoupdate.get("upstream", self.main_upstream)
+        assert upstream and isinstance(upstream, str)
         version_re = autoupdate.get("version_regex", None)
         allow_prereleases = autoupdate.get("allow_prereleases", False)
         branch_name = autoupdate.get("branch", None)
@@ -473,7 +504,7 @@ class AppAutoUpdater:
         api: Union[GithubAPI, GitlabAPI, GiteaForgejoAPI, DownloadPageAPI]
 
         if remote_type == "github":
-            assert upstream and upstream.startswith("https://github.com/"), (
+            assert upstream.startswith("https://github.com/"), (
                 f"When using strategy {strategy}, having a defined upstream code repo on github.com is required"
             )
             api = GithubAPI(upstream, auth=get_github()[0])
@@ -498,14 +529,14 @@ class AppAutoUpdater:
                 list(releases.keys()), self.app_id, version_re
             )
             latest_release = releases[latest_version_orig]
-            latest_assets = {
-                a["name"]: a["browser_download_url"]
+            latest_assets = [
+                AssetInfo(a["browser_download_url"], a["name"], a["digest"].replace("sha256:", "") if a.get("digest") else None)
                 for a in latest_release["assets"]
                 if not a["name"].endswith(".md5")
-            }
-            if remote_type in ["gitea", "forgejo"] and latest_assets == "":
+            ]
+            if remote_type in ["gitea", "forgejo"] and len(latest_assets) == 0:
                 # if empty (so only the base asset), take the tarball_url
-                latest_assets = latest_release["tarball_url"]
+                latest_assets = [ AssetInfo(latest_release["tarball_url"], TARBALL) ]
             # get the release changelog link
             latest_release_html_url = latest_release["html_url"]
             if latest_release_html_url is None or latest_release_html_url == "":
@@ -513,35 +544,34 @@ class AppAutoUpdater:
                     latest_version_orig, "", RefType.releases
                 )
 
-            if asset == "tarball":
+            if asset == TARBALL:
                 latest_tarball = api.url_for_ref(latest_version_orig, RefType.tags)
-                return latest_version, latest_tarball, latest_release_html_url
+                return LatestVersionAvailable(latest_version, { ARCHITECTURE_AGNOSTIC: AssetInfo(latest_tarball, TARBALL) }, latest_release_html_url)
             # FIXME
             if isinstance(asset, str):
                 try:
-                    _, url = self.find_matching_asset(latest_assets, asset)
-                    return latest_version, url, latest_release_html_url
+                    asset_info = self.find_matching_asset(latest_assets, asset)
+                    return LatestVersionAvailable(latest_version, {ARCHITECTURE_AGNOSTIC: asset_info}, latest_release_html_url)
                 except AutoUpdateError as e:
                     raise AutoUpdateError(
                         f"{e}.\nFull release details on {latest_release_html_url}."
                     ) from e
-
-            if isinstance(asset, dict):
+            elif isinstance(asset, dict):
                 new_assets = {}
                 for asset_name, asset_regex in asset.items():
                     try:
-                        _, url = self.find_matching_asset(latest_assets, asset_regex)
-                        new_assets[asset_name] = url
+                        asset_info = self.find_matching_asset(latest_assets, asset_regex)
+                        new_assets[asset_name] = asset_info
                     except AutoUpdateError as e:
                         raise AutoUpdateError(
                             f"{e}.\nFull release details on {latest_release_html_url}."
                         ) from e
-                return latest_version, new_assets, latest_release_html_url
+                return LatestVersionAvailable(latest_version, new_assets, latest_release_html_url)
 
             return None
 
-        if revision_type == "tag":
-            if asset != "tarball":
+        elif revision_type == "tag":
+            if asset != TARBALL:
                 raise ValueError(
                     "For the latest tag strategies, only asset = 'tarball' is supported"
                 )
@@ -566,19 +596,16 @@ class AppAutoUpdater:
                 tags, self.app_id, version_re
             )
             latest_tarball = api.url_for_ref(latest_version_orig, RefType.tags)
-            return (
-                latest_version,
-                latest_tarball,
-                api.changelog_for_ref(latest_version, "", RefType.tags),
-            )
+            return LatestVersionAvailable(latest_version, {ARCHITECTURE_AGNOSTIC: AssetInfo(latest_tarball, TARBALL) },
+                api.changelog_for_ref(latest_version, "", RefType.tags))
 
-        if revision_type == "commit":
+        elif revision_type == "commit":
             if self.latest_commit_weekly and datetime.now().weekday() != 0:
                 logging.warning(
                     f"Skipping autoupdater for {self.app_id} because 'commit' strategy are only effective on mondays"
                 )
                 return None
-            if asset != "tarball":
+            if asset != TARBALL:
                 raise ValueError(
                     "For the latest commit strategies, only asset = 'tarball' is supported"
                 )
@@ -595,21 +622,21 @@ class AppAutoUpdater:
             )
             version_format = autoupdate.get("force_version", "%Y.%m.%d")
             latest_version = latest_commit_date.strftime(version_format)
-            return (
+            return LatestVersionAvailable(
                 latest_version,
-                latest_tarball,
+                { ARCHITECTURE_AGNOSTIC : AssetInfo(latest_tarball, TARBALL) },
                 api.changelog_for_ref(
                     latest_commit["sha"], self.get_old_ref(infos), RefType.commits
-                ),
+                )
             )
 
-        if remote_type == "webpage" and revision_type == "link":
+        elif remote_type == "webpage" and revision_type == "link":
             api = DownloadPageAPI(upstream)
             links = api.get_web_page_links()
             latest_url, latest_version = self.relevant_versions(
                 list(links.values()), self.app_id, version_re
             )
-            return latest_version, latest_url, ""
+            return LatestVersionAvailable(latest_version, {ARCHITECTURE_AGNOSTIC : AssetInfo(latest_url, TARBALL) }, "")
 
         return None
 
@@ -618,42 +645,48 @@ class AppAutoUpdater:
         regex = r".*[\/-]([a-f0-9]+)\."
         if isinstance(infos["url"], str):
             try:
-                return re.match(regex, infos["url"]).group(1)
+                match = re.match(regex, infos["url"])
+                assert match and match.group(1)
+                return match.group(1)
             except AttributeError as e:
                 raise Exception(
                     f"Failed to match regex {regex} on url '{infos['url']}' ?"
                 )
-        if isinstance(infos["url"], dict):
+        elif isinstance(infos["url"], dict):
             for _, url in infos["url"]:
-                return re.match(regex, url).group(1)
-        return None
+                match = re.match(regex, url)
+                assert match and match.group(1)
+                return match.group(1)
+        else:
+            raise Exception("not reachable, not found old ref")
 
     def replace_version_and_asset_in_manifest(
         self,
         content: str,
-        new_version: str,
-        new_assets_urls: Union[str, dict],
+        new_version: LatestVersionAvailable,
         current_assets: dict,
         is_main: bool,
     ):
         replacements = []
-        if isinstance(new_assets_urls, str):
+        if current_assets.get("url", None):
+            asset = new_version.get_asset_for_arch(ARCHITECTURE_AGNOSTIC)
+            assert asset
             replacements = [
-                (current_assets["url"], new_assets_urls),
-                (current_assets["sha256"], self.sha256_of_remote_file(new_assets_urls)),
+                (current_assets["url"], asset.url),
+                (current_assets["sha256"], asset.sha256 or self.sha256_of_remote_file(asset.url)),
             ]
-        if isinstance(new_assets_urls, dict):
+        else:
             replacements = [
                 repl
-                for key, url in new_assets_urls.items()
+                for arch in ARCHITECTURES if arch in current_assets
                 for repl in (
-                    (current_assets[key]["url"], url),
-                    (current_assets[key]["sha256"], self.sha256_of_remote_file(url)),
+                    (current_assets[arch]["url"], new_version.get_asset_for_arch(arch).url),
+                    (current_assets[arch]["sha256"], new_version.get_asset_for_arch(arch).sha256 or self.sha256_of_remote_file(new_version.get_asset_for_arch(arch).url)),
                 )
             ]
 
         if is_main:
-            content = self.bump_version(content, new_version)
+            content = self.bump_version(content, new_version.version)
 
         for old, new in replacements:
             content = content.replace(old, new)
@@ -805,11 +838,14 @@ def main() -> None:
         logging.error("--pr requires --commit")
         sys.exit(1)
 
-    get_apps_repo.from_args(args)
-    cache_path = get_apps_repo.cache_path(args)
-
     # Handle apps or no apps
-    apps = list(args.apps) if args.apps else apps_to_run_auto_update_for(cache_path)
+    apps = []
+    if args.apps:
+        apps = list(args.apps)
+    else:
+        get_apps_repo.from_args(args)
+        cache_path = get_apps_repo.cache_path(args)
+        apps_to_run_auto_update_for(cache_path)
     apps_already = {}  # for which a PR already exists
     apps_updated = {}
     apps_failed = {}
