@@ -2,7 +2,7 @@
 
 import json
 import subprocess
-from typing import Any, Optional, Literal, cast, TypedDict
+from typing import Any, Optional, Literal, cast, TypedDict, NotRequired
 from functools import cache
 from pathlib import Path
 from git import Repo
@@ -11,6 +11,64 @@ import jsonschema
 import toml
 
 REPO_APPS_ROOT = Path(Repo(__file__, search_parent_directories=True).working_dir)
+
+TranslatedString = dict[str, str]
+
+
+class Subtag(TypedDict):
+    id: NotRequired[str]
+    title: TranslatedString
+
+
+class Category(TypedDict):
+    id: NotRequired[str]
+    icon: str
+    title: TranslatedString
+    description: TranslatedString
+    subtags: NotRequired[dict[str, Subtag] | list[Subtag]]
+
+
+AntiFeature = Category
+
+
+class WishlistItem(TypedDict):
+    id: NotRequired[str]
+    name: str
+    upstream: str
+    description: NotRequired[str]
+    website: NotRequired[str]
+    draft: NotRequired[str]
+    added_date: NotRequired[int]
+
+
+class GraveyardItem(TypedDict):
+    id: NotRequired[str]
+    url: str
+    category: NotRequired[str]
+    subtags: NotRequired[list[str]]
+    antifeatures: NotRequired[list[str]]
+    potential_alternative_to: NotRequired[list[str]]
+    added_date: NotRequired[int]
+    deprecated_date: NotRequired[int]
+    killed_date: NotRequired[int]
+
+
+CatalogState = Literal["working", "notworking", "inprogress"]
+
+
+class CatalogItem(TypedDict):
+    url: str
+    state: CatalogState
+    category: NotRequired[str]
+    subtags: NotRequired[list[str]]
+    level: NotRequired[int]
+    antifeatures: NotRequired[list[str]]
+    potential_alternative_to: NotRequired[list[str]]
+    revision: NotRequired[str]
+    branch: NotRequired[str]
+    added_date: NotRequired[int]
+    deprecated_date: NotRequired[int]
+
 
 SecurityLevel = Literal["danger", "warning"]
 

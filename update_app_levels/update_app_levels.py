@@ -9,7 +9,7 @@ import logging
 import tempfile
 import textwrap
 import time
-from typing import Any, Optional, TypeVar
+from typing import Any, Literal, Optional, TypeVar, TypedDict, cast
 
 from pathlib import Path
 import jinja2
@@ -22,12 +22,35 @@ from git import Repo
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from appslib import get_apps_repo
+from appslib.utils import get_catalog, CatalogItem
 
 APPS_REPO = "YunoHost/apps"
 
 CI_RESULTS_URL = "https://ci-apps.yunohost.org/ci/api/results"
 
 TOOLS_DIR = Path(__file__).resolve().parent.parent
+
+class AppTestResult(TypedDict):
+    test_type: str
+    test_arg: str
+    test_serie: str
+    main_result: str
+    test_duration: str
+    test_notes: list[str]
+
+
+class AppResult(TypedDict):
+    app: str
+    app_version: str
+    commit: str
+    commit_timestamp: int
+    architecture: Literal["amd64", "arm64", "armhf", "i386"]
+    yunohost_version: str
+    yunohost_branch: str
+    timestamp: int
+    tests: list[AppTestResult]
+    level_results: dict[str, bool]
+    level: int
 
 
 def github_token() -> Optional[str]:
@@ -37,8 +60,26 @@ def github_token() -> Optional[str]:
     return None
 
 
-def get_ci_results() -> dict[str, dict[str, Any]]:
-    return requests.get(CI_RESULTS_URL, timeout=60).json()
+VALID_ARCHITECTURES = ("amd64", "arm64", "armhf", "i386")
+
+
+def get_ci_results() -> dict[str, AppResult]:
+    data = requests.get(CI_RESULTS_URL, timeout=60).json()
+    assert isinstance(data, dict), "CI results must be a dictionary"
+    for app_id, res in data.items():
+        assert isinstance(res, dict), f"Result for {app_id} must be a dictionary"
+        assert isinstance(res.get("app"), str), f"Invalid app for {app_id}"
+        assert isinstance(res.get("app_version"), str), f"Invalid app_version for {app_id}"
+        assert isinstance(res.get("commit"), str), f"Invalid commit for {app_id}"
+        assert isinstance(res.get("commit_timestamp"), int), f"Invalid commit_timestamp for {app_id}"
+        assert res.get("architecture") in VALID_ARCHITECTURES, f"Invalid architecture for {app_id}"
+        assert isinstance(res.get("yunohost_version"), str), f"Invalid yunohost_version for {app_id}"
+        assert isinstance(res.get("yunohost_branch"), str), f"Invalid yunohost_branch for {app_id}"
+        assert isinstance(res.get("timestamp"), int), f"Invalid timestamp for {app_id}"
+        assert isinstance(res.get("tests"), list), f"Invalid tests for {app_id}"
+        assert isinstance(res.get("level_results"), dict), f"Invalid level_results for {app_id}"
+        assert isinstance(res.get("level"), int), f"Invalid level for {app_id}"
+    return cast(dict[str, AppResult], data)
 
 
 def ci_result_is_outdated(result) -> bool:
@@ -61,7 +102,9 @@ def _sort_tomlkit_table(table: TomlkitSortable) -> TomlkitSortable:
     return table
 
 
-def update_catalog(catalog, ci_results) -> dict:
+def update_catalog(
+    catalog: Any, ci_results: dict[str, AppResult]
+) -> Any:
     """
     Actually change the catalog data
     """
@@ -70,7 +113,7 @@ def update_catalog(catalog, ci_results) -> dict:
         catalog[app] = _sort_tomlkit_table(infos)
     catalog = _sort_tomlkit_table(catalog)
 
-    def app_level(app):
+    def app_level(app: str) -> int:
         if app not in ci_results:
             return 0
         if ci_result_is_outdated(ci_results[app]):
@@ -83,12 +126,14 @@ def update_catalog(catalog, ci_results) -> dict:
     return catalog
 
 
-def list_changes(catalog, ci_results) -> dict[str, list[tuple[str, int, int]]]:
+def list_changes(
+    catalog: dict[str, CatalogItem], ci_results: dict[str, AppResult]
+) -> dict[str, list[CatalogItem]]:
     """
     Lists changes for a pull request
     """
 
-    changes = {
+    changes: dict[str, list[CatalogItem]] = {
         "major_regressions": [],
         "minor_regressions": [],
         "improvements": [],

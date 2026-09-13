@@ -25,7 +25,11 @@ from appslib.utils import (
     get_catalog,
     get_categories,
     get_security,
+    AntiFeature,
+    CatalogItem,
+    Category,
     SecurityData,
+    Subtag,
 )
 import appslib.get_apps_repo as get_apps_repo
 
@@ -37,24 +41,59 @@ FORUM_TOKEN = TOKEN_PATH.open("r", encoding="utf-8").read().strip() if TOKEN_PAT
 FORUM_URL = "https://forum.yunohost.org"
 
 @cache
-def categories_list():
+def categories_list() -> list[Category]:
     # Load categories and reformat the structure to have a list with an "id" key
-    new_categories = get_categories()
-    for category_id, infos in new_categories.items():
-        infos["id"] = category_id
-        for subtag_id, subtag_infos in infos.get("subtags", {}).items():
-            subtag_infos["id"] = subtag_id
-        infos["subtags"] = list(infos.get("subtags", {}).values())
-    return list(new_categories.values())
+    categories_data = get_categories()
+    result: list[Category] = []
+    for category_id, infos in categories_data.items():
+        subtags_raw = infos.get("subtags", {})
+        subtags_list: list[Subtag] = []
+        if isinstance(subtags_raw, dict):
+            for subtag_id, subtag_infos in subtags_raw.items():
+                subtags_list.append(
+                    {
+                        "id": subtag_id,
+                        "title": subtag_infos["title"],
+                    }
+                )
+        result.append(
+            {
+                "id": category_id,
+                "icon": infos["icon"],
+                "title": infos["title"],
+                "description": infos["description"],
+                "subtags": subtags_list,
+            }
+        )
+    return result
 
 
 @cache
-def antifeatures_list():
+def antifeatures_list() -> list[AntiFeature]:
     # (Same for antifeatures)
-    new_antifeatures = get_antifeatures()
-    for antifeature_id, infos in new_antifeatures.items():
-        infos["id"] = antifeature_id
-    return list(new_antifeatures.values())
+    antifeatures_data = get_antifeatures()
+    result: list[AntiFeature] = []
+    for antifeature_id, infos in antifeatures_data.items():
+        subtags_raw = infos.get("subtags", {})
+        subtags_list: list[Subtag] = []
+        if isinstance(subtags_raw, dict):
+            for subtag_id, subtag_infos in subtags_raw.items():
+                subtags_list.append(
+                    {
+                        "id": subtag_id,
+                        "title": subtag_infos["title"],
+                    }
+                )
+        item: AntiFeature = {
+            "id": antifeature_id,
+            "icon": infos["icon"],
+            "title": infos["title"],
+            "description": infos["description"],
+        }
+        if subtags_list:
+            item["subtags"] = subtags_list
+        result.append(item)
+    return result
 
 
 @cache
@@ -89,7 +128,7 @@ def __build_app_dict(data) -> Optional[tuple[str, dict[str, Any]]]:
 
 
 def build_base_catalog(
-    catalog: dict[str, dict[str, Any]], cache_path: Path, nproc: int
+    catalog: dict[str, CatalogItem], cache_path: Path, nproc: int
 ):
     result_dict = {}
 
