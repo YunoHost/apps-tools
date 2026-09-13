@@ -15,10 +15,11 @@ from appslib.utils import (
     get_categories,
     get_graveyard,
     get_wishlist,
+    CatalogItem,
 )
 
 
-def validate_schema(data: dict, schema_path: Path) -> List[str]:
+def validate_schema(data: dict[str, Any], schema_path: Path) -> List[str]:
     schema = json.load(schema_path.open("r", encoding="utf-8"))
     validator = jsonschema.Draft202012Validator(schema)
     return [
@@ -27,7 +28,7 @@ def validate_schema(data: dict, schema_path: Path) -> List[str]:
     ]
 
 
-def validate_schema_pretty(apps_path: Path, data: dict, name: str) -> bool:
+def validate_schema_pretty(apps_path: Path, data: dict[str, Any], name: str) -> bool:
     schema_path = apps_path / "schemas" / f"{name}.toml.schema.json"
     schema_errors = list(validate_schema(data, schema_path))
     if schema_errors:
@@ -39,7 +40,7 @@ def validate_schema_pretty(apps_path: Path, data: dict, name: str) -> bool:
 
 
 def check_app(
-    app: str, infos: Dict[str, Any]
+    app: str, infos: CatalogItem
 ) -> Generator[Tuple[str, bool], None, None]:
     if "state" not in infos:
         yield "state is missing", True
@@ -89,13 +90,15 @@ def check_app(
     if not category:
         yield "category is missing", True
     else:
-        if category not in get_categories():
+        cat_info = get_categories().get(category)
+        if not cat_info:
             yield f"unknown category {category}", True
-
-        subtags = infos.get("subtags", [])
-        for subtag in subtags:
-            if subtag not in get_categories().get(category, {}).get("subtags", []):
-                yield f"unknown subtag {category} / {subtag}", False
+        else:
+            cat_subtags = cat_info.get("subtags")
+            subtags = infos.get("subtags", [])
+            for subtag in subtags:
+                if not isinstance(cat_subtags, dict) or subtag not in cat_subtags:
+                    yield f"unknown subtag {category} / {subtag}", False
 
 
 def check_all_apps() -> bool:

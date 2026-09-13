@@ -75,7 +75,7 @@ class AppDir:
             repo.git.reset("--hard", f"origin/{branch}")
 
 
-def __appdir_ensure_mapped(data):
+def __appdir_ensure_mapped(data: tuple[str, Path, str, str, bool, bool]) -> None:
     name, path, url, branch, url_ssh, all_branches = data
     try:
         AppDir(name, path).ensure(url, branch, url_ssh, all_branches)
@@ -113,7 +113,7 @@ def apps_cache_cleanup(cache_path: Path, apps: dict[str, dict[str, Any]]) -> Non
             AppDir("", element).cleanup()
 
 
-def __run_for_catalog():
+def __run_for_catalog() -> None:
     parser = argparse.ArgumentParser()
     get_apps_repo.add_args(parser)
     parser.add_argument("-v", "--verbose", action="store_true")

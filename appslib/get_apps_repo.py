@@ -13,7 +13,7 @@ from .utils import set_apps_path
 DEFAULT_GIT_REPO = "https://github.com/YunoHost/apps"
 
 # This provides a reference to the tempfile, thus keeping it alive until sys.exit
-APPS_REPO_TMPDIR: Optional[tempfile.TemporaryDirectory] = None
+APPS_REPO_TMPDIR: Optional[tempfile.TemporaryDirectory[str]] = None
 
 # This is the actual value returned by from_args()
 APPS_REPO_PATH: Optional[Path] = None

@@ -12,7 +12,7 @@ from collections import OrderedDict
 from functools import cache
 from itertools import repeat
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, TypedDict, Union, cast
 
 import toml
 import tqdm
@@ -25,10 +25,28 @@ from appslib.utils import (
     get_catalog,
     get_categories,
     get_security,
+    AntiFeature,
+    CatalogItem,
+    Category,
+    SecurityData,
+    Subtag,
 )
 import appslib.get_apps_repo as get_apps_repo
 
 now = time.time()
+
+
+class BranchCIResult(TypedDict):
+    """Structure of a single branch's CI result."""
+    commit: str
+    level: str
+    commit_timestamp: int
+    app_version: str
+    pr_url: str
+
+
+AppDevCIResults = dict[str, BranchCIResult]
+
 
 TOOLS_DIR = Path(__file__).resolve().parent
 TOKEN_PATH = TOOLS_DIR / ".forum_token"
@@ -36,38 +54,112 @@ FORUM_TOKEN = TOKEN_PATH.open("r", encoding="utf-8").read().strip() if TOKEN_PAT
 FORUM_URL = "https://forum.yunohost.org"
 
 @cache
-def categories_list():
+def categories_list() -> list[Category]:
     # Load categories and reformat the structure to have a list with an "id" key
-    new_categories = get_categories()
-    for category_id, infos in new_categories.items():
-        infos["id"] = category_id
-        for subtag_id, subtag_infos in infos.get("subtags", {}).items():
-            subtag_infos["id"] = subtag_id
-        infos["subtags"] = list(infos.get("subtags", {}).values())
-    return list(new_categories.values())
+    categories_data = get_categories()
+    result: list[Category] = []
+    for category_id, infos in categories_data.items():
+        subtags_raw = infos.get("subtags", {})
+        subtags_list: list[Subtag] = []
+        if isinstance(subtags_raw, dict):
+            for subtag_id, subtag_infos in subtags_raw.items():
+                subtags_list.append(
+                    {
+                        "id": subtag_id,
+                        "title": subtag_infos["title"],
+                    }
+                )
+        result.append(
+            {
+                "id": category_id,
+                "icon": infos["icon"],
+                "title": infos["title"],
+                "description": infos["description"],
+                "subtags": subtags_list,
+            }
+        )
+    return result
 
 
 @cache
-def antifeatures_list():
+def antifeatures_list() -> list[AntiFeature]:
     # (Same for antifeatures)
-    new_antifeatures = get_antifeatures()
-    for antifeature_id, infos in new_antifeatures.items():
-        infos["id"] = antifeature_id
-    return list(new_antifeatures.values())
+    antifeatures_data = get_antifeatures()
+    result: list[AntiFeature] = []
+    for antifeature_id, infos in antifeatures_data.items():
+        subtags_raw = infos.get("subtags", {})
+        subtags_list: list[Subtag] = []
+        if isinstance(subtags_raw, dict):
+            for subtag_id, subtag_infos in subtags_raw.items():
+                subtags_list.append(
+                    {
+                        "id": subtag_id,
+                        "title": subtag_infos["title"],
+                    }
+                )
+        item: AntiFeature = {
+            "id": antifeature_id,
+            "icon": infos["icon"],
+            "title": infos["title"],
+            "description": infos["description"],
+        }
+        if subtags_list:
+            item["subtags"] = subtags_list
+        result.append(item)
+    return result
 
 
 @cache
-def security_list():
+def security_list() -> SecurityData:
     security = get_security()
     security["version"] = 1
     return security
 
 
+def _validate_branch_ci_result(data: Any) -> BranchCIResult:
+    """Validate that data conforms to BranchCIResult structure."""
+    if not isinstance(data, dict):
+        raise TypeError(f"Expected dict, got {type(data)}")
+    
+    required_keys = {"commit", "level", "commit_timestamp", "app_version", "pr_url"}
+    missing_keys = required_keys - set(data.keys())
+    if missing_keys:
+        raise ValueError(f"Missing required keys: {missing_keys}")
+    
+    if not isinstance(data["commit"], str):
+        raise TypeError(f"commit must be str, got {type(data['commit'])}")
+    if not isinstance(data["level"], str):
+        raise TypeError(f"level must be str, got {type(data['level'])}")
+    if not isinstance(data["commit_timestamp"], int):
+        raise TypeError(f"commit_timestamp must be int, got {type(data['commit_timestamp'])}")
+    if not isinstance(data["app_version"], str):
+        raise TypeError(f"app_version must be str, got {type(data['app_version'])}")
+    if not isinstance(data["pr_url"], str):
+        raise TypeError(f"pr_url must be str, got {type(data['pr_url'])}")
+    
+    return cast(BranchCIResult, data)
+
+
 @cache
-def dev_ci_result_per_branch():
+def dev_ci_result_per_branch() -> dict[str, AppDevCIResults]:
     url = "https://ci-apps-dev.yunohost.org/ci/api/results-dev"
     try:
-        return requests.get(url).json()
+        response = requests.get(url).json()
+        if not isinstance(response, dict):
+            raise TypeError(f"Expected dict at top level, got {type(response)}")
+        
+        # Validate structure: dict[str, dict[str, BranchCIResult]]
+        validated: dict[str, AppDevCIResults] = {}
+        for app_id, app_results in response.items():
+            if not isinstance(app_results, dict):
+                raise TypeError(f"app_results for {app_id} must be dict, got {type(app_results)}")
+            
+            validated_app_results: AppDevCIResults = {}
+            for branch_name, branch_result in app_results.items():
+                validated_app_results[branch_name] = _validate_branch_ci_result(branch_result)
+            validated[app_id] = validated_app_results
+        
+        return validated
     except Exception as e:
         logging.error(f"[List builder] Failed to fetch the CI apps dev result : {e}")
         return {}
@@ -78,7 +170,7 @@ def dev_ci_result_per_branch():
 ################################
 
 
-def __build_app_dict(data) -> Optional[tuple[str, dict[str, Any]]]:
+def __build_app_dict(data: tuple[tuple[str, CatalogItem], Path]) -> Optional[tuple[str, dict[str, Any]]]:
     (name, info), cache_path = data
     try:
         return name, build_app_dict(name, info, cache_path)
@@ -88,9 +180,9 @@ def __build_app_dict(data) -> Optional[tuple[str, dict[str, Any]]]:
 
 
 def build_base_catalog(
-    catalog: dict[str, dict[str, Any]], cache_path: Path, nproc: int
-):
-    result_dict = {}
+    catalog: dict[str, CatalogItem], cache_path: Path, nproc: int
+) -> dict[str, dict[str, Any]]:
+    result_dict: dict[str, dict[str, Any]] = {}
 
     with multiprocessing.Pool(processes=nproc) as pool:
         with logging_redirect_tqdm():
@@ -106,7 +198,7 @@ def build_base_catalog(
     return result_dict
 
 
-def write_catalog_v3(base_catalog, apps_path: Path, target_dir: Path) -> None:
+def write_catalog_v3(base_catalog: dict[str, dict[str, Any]], apps_path: Path, target_dir: Path) -> None:
     logos_dir = target_dir / "logos"
     logos_dir.mkdir(parents=True, exist_ok=True)
 
@@ -149,35 +241,38 @@ def write_catalog_v3(base_catalog, apps_path: Path, target_dir: Path) -> None:
     )
 
 
-def build_app_dict(app, infos, cache_path: Path):
+def build_app_dict(app: str, infos: CatalogItem | dict[str, Any], cache_path: Path) -> dict[str, Any]:
     # Make sure we have some cache
     this_app_cache = cache_path / app
     assert this_app_cache.exists(), f"No cache yet for {app}"
 
     repo = Repo(this_app_cache)
 
+    # Cast to dict to allow adding new keys
+    infos_dict: dict[str, Any] = cast(dict[str, Any], infos)
+
     # If added_date is not present, we are in a github action of the PR that adds it... so default to a bad value.
-    infos["added_in_catalog"] = infos.get("added_date", 0)
+    infos_dict["added_in_catalog"] = infos_dict.get("added_date", 0)
     # int(commit_timestamps_for_this_app_in_catalog.split("\n")[0])
 
-    infos["branch"] = infos.get("branch", "master")
-    infos["revision"] = infos.get("revision", "HEAD")
+    infos_dict["branch"] = infos_dict.get("branch", "master")
+    infos_dict["revision"] = infos_dict.get("revision", "HEAD")
 
     # If using head, find the most recent meaningful commit in logs
-    if infos["revision"] == "HEAD":
-        infos["revision"] = repo.head.commit.hexsha
+    if infos_dict["revision"] == "HEAD":
+        infos_dict["revision"] = repo.head.commit.hexsha
 
     # Otherwise, validate commit exists
     else:
         try:
-            _ = repo.commit(infos["revision"])
+            _ = repo.commit(infos_dict["revision"])
         except ValueError as err:
             raise RuntimeError(
-                f"Revision ain't in history ? {infos['revision']}"
+                f"Revision ain't in history ? {infos_dict['revision']}"
             ) from err
 
     # Find timestamp corresponding to that commit
-    timestamp = repo.commit(infos["revision"]).committed_date
+    timestamp = repo.commit(infos_dict["revision"]).committed_date
 
     alternative_branches = {}
     dev_ci_result_for_this_app = dev_ci_result_per_branch().get(app, {})
@@ -188,7 +283,7 @@ def build_app_dict(app, infos, cache_path: Path):
         if branch != "testing":
             continue
         try:
-            ahead = not repo.is_ancestor(result_infos["commit"], infos["branch"])
+            ahead = not repo.is_ancestor(result_infos["commit"], infos_dict["branch"])  # type: ignore
         except Exception:
             # This will typically fail if the ref of the commit is unknown because it's only a single-branch checkout
             # ... BUT it could also be a super-old commit and we only have the last X commits in our checkout to optimize space hmpf
@@ -211,31 +306,31 @@ def build_app_dict(app, infos, cache_path: Path):
     return {
         "id": manifest["id"],
         "git": {
-            "branch": infos["branch"],
-            "revision": infos["revision"],
-            "url": infos["url"],
+            "branch": infos_dict["branch"],
+            "revision": infos_dict["revision"],
+            "url": infos_dict["url"],
         },
         "alternative_branches": alternative_branches,
-        "added_in_catalog": infos["added_in_catalog"],
+        "added_in_catalog": infos_dict["added_in_catalog"],
         "lastUpdate": timestamp,
         "manifest": manifest,
-        "state": infos["state"],
-        "level": infos.get("level", "?"),
-        "maintained": "package-not-maintained" not in infos.get("antifeatures", []),
-        "high_quality": infos.get("high_quality", False),
-        "featured": infos.get("featured", False),
-        "category": infos.get("category", None),
-        "subtags": infos.get("subtags", []),
-        "potential_alternative_to": infos.get("potential_alternative_to", []),
+        "state": infos_dict["state"],
+        "level": infos_dict.get("level", "?"),
+        "maintained": "package-not-maintained" not in infos_dict.get("antifeatures", []),
+        "high_quality": infos_dict.get("high_quality", False),
+        "featured": infos_dict.get("featured", False),
+        "category": infos_dict.get("category", None),
+        "subtags": infos_dict.get("subtags", []),
+        "potential_alternative_to": infos_dict.get("potential_alternative_to", []),
         "antifeatures": list(
             set(
                 list(manifest.get("antifeatures", {}).keys())
-                + infos.get("antifeatures", [])
+                + infos_dict.get("antifeatures", [])
             )
         ),
     }
 
-def put_forum_app_tags(forum_app_tags):
+def put_forum_app_tags(forum_app_tags: list[str]) -> dict[str, Any] | requests.Response:
     if FORUM_TOKEN is None:
         logging.warning("FORUM_TOKEN not set, skipping tags update.")
         return {}
