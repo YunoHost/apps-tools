@@ -25,6 +25,7 @@ from appslib.utils import (
     get_catalog,
     get_categories,
     get_security,
+    SecurityData,
 )
 import appslib.get_apps_repo as get_apps_repo
 
@@ -57,7 +58,7 @@ def antifeatures_list():
 
 
 @cache
-def security_list():
+def security_list() -> SecurityData:
     security = get_security()
     security["version"] = 1
     return security

@@ -1,14 +1,32 @@
 #!/usr/bin/env python3
 
+import json
 import subprocess
-from typing import Any, Optional, Literal
+from typing import Any, Optional, Literal, cast, TypedDict
 from functools import cache
 from pathlib import Path
 from git import Repo
 
+import jsonschema
 import toml
 
 REPO_APPS_ROOT = Path(Repo(__file__, search_parent_directories=True).working_dir)
+
+SecurityLevel = Literal["danger", "warning"]
+
+
+class SecurityEntry(TypedDict):
+    date: str
+    title: str
+    more_infos: list[str]
+    fixed_in_version: str | dict[str, str]
+    level: SecurityLevel
+
+
+class SecurityData(TypedDict, total=False):
+    apps: dict[str, list[SecurityEntry]]
+    system: dict[str, list[SecurityEntry]]
+    version: int
 
 
 def set_apps_path(apps_path: Path) -> None:
@@ -69,6 +87,10 @@ def get_graveyard() -> dict[str, dict[str, str]]:
 
 
 @cache
-def get_security() -> dict[Literal["apps", "system"], dict[str, list[dict]]]:
+def get_security() -> SecurityData:
     security_path = REPO_APPS_ROOT / "security.toml"
-    return toml.load(security_path)
+    schema_path = REPO_APPS_ROOT / "schemas" / "security.toml.schema.json"
+    data = toml.load(security_path)
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    jsonschema.validate(instance=data, schema=schema)
+    return cast(SecurityData, data)
