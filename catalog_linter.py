@@ -19,7 +19,7 @@ from appslib.utils import (
 )
 
 
-def validate_schema(data: dict, schema_path: Path) -> List[str]:
+def validate_schema(data: dict[str, Any], schema_path: Path) -> List[str]:
     schema = json.load(schema_path.open("r", encoding="utf-8"))
     validator = jsonschema.Draft202012Validator(schema)
     return [
@@ -28,7 +28,7 @@ def validate_schema(data: dict, schema_path: Path) -> List[str]:
     ]
 
 
-def validate_schema_pretty(apps_path: Path, data: dict, name: str) -> bool:
+def validate_schema_pretty(apps_path: Path, data: dict[str, Any], name: str) -> bool:
     schema_path = apps_path / "schemas" / f"{name}.toml.schema.json"
     schema_errors = list(validate_schema(data, schema_path))
     if schema_errors:
