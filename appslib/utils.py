@@ -108,40 +108,60 @@ def git(cmd: list[str], cwd: Optional[Path] = None) -> str:
 
 
 @cache
-def get_catalog(working_only: bool = False) -> dict[str, dict[str, Any]]:
+def get_catalog(working_only: bool = False) -> dict[str, CatalogItem]:
     """Load the app catalog and filter out the non-working ones"""
-    catalog = toml.load((REPO_APPS_ROOT / "apps.toml").open("r", encoding="utf-8"))
+    catalog_path = REPO_APPS_ROOT / "apps.toml"
+    schema_path = REPO_APPS_ROOT / "schemas" / "apps.toml.schema.json"
+    data = toml.load(catalog_path.open("r", encoding="utf-8"))
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    jsonschema.validate(instance=data, schema=schema)
     if working_only:
-        catalog = {
+        data = {
             app: infos
-            for app, infos in catalog.items()
+            for app, infos in data.items()
             if infos.get("state") != "notworking"
         }
-    return catalog
+    return cast(dict[str, CatalogItem], data)
 
 
 @cache
-def get_categories() -> dict[str, Any]:
+def get_categories() -> dict[str, Category]:
     categories_path = REPO_APPS_ROOT / "categories.toml"
-    return toml.load(categories_path)
+    schema_path = REPO_APPS_ROOT / "schemas" / "categories.toml.schema.json"
+    data = toml.load(categories_path.open("r", encoding="utf-8"))
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    jsonschema.validate(instance=data, schema=schema)
+    return cast(dict[str, Category], data)
 
 
 @cache
-def get_antifeatures() -> dict[str, Any]:
+def get_antifeatures() -> dict[str, AntiFeature]:
     antifeatures_path = REPO_APPS_ROOT / "antifeatures.toml"
-    return toml.load(antifeatures_path)
+    schema_path = REPO_APPS_ROOT / "schemas" / "antifeatures.toml.schema.json"
+    data = toml.load(antifeatures_path.open("r", encoding="utf-8"))
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    jsonschema.validate(instance=data, schema=schema)
+    return cast(dict[str, AntiFeature], data)
 
 
 @cache
-def get_wishlist() -> dict[str, dict[str, str]]:
+def get_wishlist() -> dict[str, WishlistItem]:
     wishlist_path = REPO_APPS_ROOT / "wishlist.toml"
-    return toml.load(wishlist_path)
+    schema_path = REPO_APPS_ROOT / "schemas" / "wishlist.toml.schema.json"
+    data = toml.load(wishlist_path.open("r", encoding="utf-8"))
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    jsonschema.validate(instance=data, schema=schema)
+    return cast(dict[str, WishlistItem], data)
 
 
 @cache
-def get_graveyard() -> dict[str, dict[str, str]]:
-    wishlist_path = REPO_APPS_ROOT / "graveyard.toml"
-    return toml.load(wishlist_path)
+def get_graveyard() -> dict[str, GraveyardItem]:
+    graveyard_path = REPO_APPS_ROOT / "graveyard.toml"
+    schema_path = REPO_APPS_ROOT / "schemas" / "graveyard.toml.schema.json"
+    data = toml.load(graveyard_path.open("r", encoding="utf-8"))
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    jsonschema.validate(instance=data, schema=schema)
+    return cast(dict[str, GraveyardItem], data)
 
 
 @cache
