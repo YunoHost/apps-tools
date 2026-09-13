@@ -82,7 +82,7 @@ def get_ci_results() -> dict[str, AppResult]:
     return cast(dict[str, AppResult], data)
 
 
-def ci_result_is_outdated(result) -> bool:
+def ci_result_is_outdated(result: AppResult) -> bool:
     # 3600 * 24 * 60 = ~2 months
     return (int(time.time()) - result.get("timestamp", 0)) > 3600 * 24 * 60
 
@@ -128,12 +128,12 @@ def update_catalog(
 
 def list_changes(
     catalog: dict[str, CatalogItem], ci_results: dict[str, AppResult]
-) -> dict[str, list[CatalogItem]]:
+) -> dict[str, list[tuple[str, int | None, int] | str]]:
     """
     Lists changes for a pull request
     """
 
-    changes: dict[str, list[CatalogItem]] = {
+    changes: dict[str, list[tuple[str, int | None, int] | str]] = {
         "major_regressions": [],
         "minor_regressions": [],
         "improvements": [],
@@ -172,7 +172,7 @@ def list_changes(
     return changes
 
 
-def pretty_changes(changes: dict[str, list[tuple[str, int, int]]]) -> str:
+def pretty_changes(changes: dict[str, list[tuple[str, int | None, int] | str]]) -> str:
     pr_body_template = textwrap.dedent(
         """
         {%- if changes["major_regressions"] %}
@@ -251,7 +251,7 @@ def make_pull_request(pr_body: str) -> None:
             logging.info(f"Opened a Pull Request at {new_url} !")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--commit", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--pr", action=argparse.BooleanOptionalAction, default=True)
